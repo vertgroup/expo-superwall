@@ -58,6 +58,24 @@ export interface Experiment {
  */
 export type EntitlementType = "SERVICE_LEVEL" // Currently, only "SERVICE_LEVEL" is used.
 
+export type EntitlementStore =
+  | "APP_STORE"
+  | "STRIPE"
+  | "PADDLE"
+  | "PLAY_STORE"
+  | "SUPERWALL"
+  | "CUSTOM"
+  | "OTHER"
+
+export type EntitlementState =
+  | "inGracePeriod"
+  | "subscribed"
+  | "expired"
+  | "inBillingRetryPeriod"
+  | "revoked"
+
+export type EntitlementOfferType = "trial" | "code" | "promotional" | "winback"
+
 /**
  * Represents a user entitlement, signifying a feature or content piece the user has access to.
  */
@@ -70,6 +88,21 @@ export interface Entitlement {
    * The type of the entitlement. See {@link EntitlementType}.
    */
   type: EntitlementType
+  /**
+   * Optional subscription metadata supplied by an external purchase controller.
+   * Omitted values remain unknown rather than being coerced to a default.
+   */
+  isActive?: boolean
+  productIds?: string[]
+  latestProductId?: string | null
+  store?: EntitlementStore | null
+  startsAt?: string | number | null
+  renewedAt?: string | number | null
+  expiresAt?: string | number | null
+  isLifetime?: boolean | null
+  willRenew?: boolean | null
+  state?: EntitlementState | null
+  offerType?: EntitlementOfferType | null
 }
 
 /**

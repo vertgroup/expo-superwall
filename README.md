@@ -251,6 +251,52 @@ Key functions from `useUser`:
 - `user`: An object containing the user's `appUserId` and other attributes.
 - `subscriptionStatus`: An object indicating the user's subscription status (e.g., `active`, `inactive`).
 
+#### Reporting Renewal Metadata from an External Purchase Controller
+
+External purchase controllers can provide the subscription metadata used by
+Superwall's built-in renewal audiences:
+
+```tsx
+import { useUser } from "expo-superwall";
+
+function SubscriptionSync({ snapshot }) {
+  const { setSubscriptionStatus } = useUser();
+
+  const sync = async () => {
+    await setSubscriptionStatus(
+      snapshot.isActive
+        ? {
+            status: "ACTIVE",
+            entitlements: [
+              {
+                id: "pro",
+                type: "SERVICE_LEVEL",
+                isActive: true,
+                store:
+                  snapshot.source === "stripe"
+                    ? "STRIPE"
+                    : snapshot.source === "app_store"
+                      ? "APP_STORE"
+                      : "OTHER",
+                expiresAt: snapshot.expiresAt,
+                willRenew: snapshot.willRenew,
+                state: "subscribed",
+                offerType: snapshot.periodType === "trial" ? "trial" : null,
+              },
+            ],
+          }
+        : { status: "INACTIVE" },
+    );
+  };
+
+  // Call sync after identity and subscription data are ready.
+  return null;
+}
+```
+
+Keep unknown values as `null`; do not coerce an unknown renewal decision to
+`false`.
+
 ### Triggering Paywalls with `usePlacement`
 
 The `usePlacement` hook allows you to register and trigger paywalls (placements) that you've configured in your Superwall dashboard.

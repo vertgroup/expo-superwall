@@ -343,8 +343,7 @@ class SuperwallExpoModule : Module() {
             "ACTIVE" -> {
               val entitlementsArray = status["entitlements"] as? List<Map<String, Any>>
               val entitlementsSet: Set<Entitlement> = entitlementsArray?.map { item ->
-                val id = item["id"] as? String
-                id?.let { Entitlement(id = it) }
+                entitlementFromJson(item)
               }?.filterNotNull()?.toSet() ?: emptySet()
               subscriptionStatus = SubscriptionStatus.Active(entitlementsSet)
             }

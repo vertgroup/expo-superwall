@@ -26,10 +26,8 @@ extension SubscriptionStatus {
       return .inactive
     case "ACTIVE":
       let entitlementsSet: Set<Entitlement> = Set(
-        entitlements.compactMap { dict in
-          guard let id = dict["id"] as? String else { return nil }
-          return Entitlement(id: id)
-        })
+        entitlements.compactMap(Entitlement.fromJson)
+      )
       return .active(entitlementsSet)
     default:
       return .unknown

@@ -301,6 +301,29 @@ describe("SDK behavior regressions", () => {
     expect(mockSetSubscriptionStatus).toHaveBeenCalledWith({ status: "INACTIVE" })
   })
 
+  it("forwards external renewal metadata to the native module", async () => {
+    const status = {
+      status: "ACTIVE" as const,
+      entitlements: [
+        {
+          id: "pro",
+          type: "SERVICE_LEVEL" as const,
+          isActive: true,
+          store: "STRIPE" as const,
+          expiresAt: "2026-08-01T00:00:00.000Z",
+          willRenew: false,
+          state: "subscribed" as const,
+          offerType: null,
+        },
+      ],
+    }
+
+    await useSuperwallStore.getState().configure("api-key")
+    await useSuperwallStore.getState().setSubscriptionStatus(status)
+
+    expect(mockSetSubscriptionStatus).toHaveBeenCalledWith(status)
+  })
+
   it("waits for configure before setting integration attributes", async () => {
     let resolveConfigure: ((value: boolean) => void) | undefined
     mockConfigure.mockReturnValueOnce(
