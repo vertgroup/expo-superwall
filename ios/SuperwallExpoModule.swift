@@ -264,32 +264,11 @@ public class SuperwallExpoModule: Module {
     AsyncFunction("setSubscriptionStatus") { (status: [String: Any], promise: Promise) in
       DispatchQueue.main.async {
         let statusString = (status["status"] as? String)?.uppercased() ?? "UNKNOWN"
-        let subscriptionStatus: SubscriptionStatus
-
         print("Setting subscription status to: \(statusString)")
-
-        switch statusString {
-        case "UNKNOWN":
-          subscriptionStatus = .unknown
-        case "INACTIVE":
-          subscriptionStatus = .inactive
-        case "ACTIVE":
-          if let entitlementsArray = status["entitlements"] as? [[String: Any]] {
-            let entitlementsSet: Set<Entitlement> = Set(
-              entitlementsArray.compactMap { item in
-                if let id = item["id"] as? String {
-                  return Entitlement(id: id)
-                }
-                return nil
-              }
-            )
-            subscriptionStatus = .active(entitlementsSet)
-          } else {
-            subscriptionStatus = .inactive
-          }
-        default:
-          subscriptionStatus = .unknown
-        }
+        let subscriptionStatus = SubscriptionStatus.from(
+          status: statusString,
+          entitlements: status["entitlements"] as? [[String: Any]] ?? []
+        )
 
         Superwall.shared.subscriptionStatus = subscriptionStatus
         promise.resolve(nil)
