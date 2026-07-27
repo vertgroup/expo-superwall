@@ -103,6 +103,26 @@ public class SuperwallExpoModule: Module {
       didRedeemLink
     )
 
+    View(SuperwallExpoPaywallView.self) {
+      ViewName("PaywallView")
+      Events(
+        "onPaywallLoadStart",
+        "onPaywallPresent",
+        "onPaywallDismiss",
+        "onPaywallSkip",
+        "onPaywallError"
+      )
+      Prop("placement") { (view: SuperwallExpoPaywallView, placement: String) in
+        view.setPlacement(placement)
+      }
+      Prop("params") { (view: SuperwallExpoPaywallView, params: [String: Any]?) in
+        view.setParams(params)
+      }
+      OnViewDidUpdateProps { (view: SuperwallExpoPaywallView) in
+        view.loadPaywallIfNeeded()
+      }
+    }
+
     AsyncFunction("identify") { (userId: String, options: [String: Any]?, promise: Promise) in
       DispatchQueue.main.async {
         let identityOptions = IdentityOptions.fromJson(options)

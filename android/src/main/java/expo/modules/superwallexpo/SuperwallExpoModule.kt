@@ -127,6 +127,29 @@ class SuperwallExpoModule : Module() {
       didRedeemLink
     )
 
+    View(SuperwallExpoPaywallView::class) {
+      Name("PaywallView")
+      Events(
+        "onPaywallLoadStart",
+        "onPaywallPresent",
+        "onPaywallDismiss",
+        "onPaywallSkip",
+        "onPaywallError",
+      )
+      Prop("placement") { view: SuperwallExpoPaywallView, placement: String ->
+        view.setPlacement(placement)
+      }
+      Prop("params") { view: SuperwallExpoPaywallView, params: Map<String, Any>? ->
+        view.setParams(params)
+      }
+      OnViewDidUpdateProps { view: SuperwallExpoPaywallView ->
+        view.loadPaywallIfNeeded()
+      }
+      OnViewDestroys { view: SuperwallExpoPaywallView ->
+        view.destroy()
+      }
+    }
+
     AsyncFunction("identify") { userId: String, options: Map<String, Any>?, promise: Promise ->
       scope.launch {
         try {
@@ -297,7 +320,6 @@ class SuperwallExpoModule : Module() {
         promise.resolve(null)
       }
     }
-    
 
     AsyncFunction("getAssignments") { promise: Promise ->
         Superwall.instance.getAssignments()
