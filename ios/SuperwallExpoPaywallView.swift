@@ -72,6 +72,8 @@ final class SuperwallExpoPaywallView: ExpoView, PaywallViewControllerDelegate {
           paywall.presentingViewController == nil,
           paywall.viewIfLoaded?.superview == nil
         else {
+          // Allow a later prop update or reattach to retry once the other host lets go.
+          self.configurationKey = nil
           self.onPaywallError([
             "message":
               "The retrieved paywall is already attached to another view. Use a different placement for each mounted PaywallView."
@@ -89,6 +91,9 @@ final class SuperwallExpoPaywallView: ExpoView, PaywallViewControllerDelegate {
         // A new prop set or unmount invalidated this request.
       } catch {
         guard !Task.isCancelled, generation == self.loadGeneration else { return }
+        // A failed load is not a settled decision (unlike a skip): clear the key so
+        // the same configuration can retry on the next prop update or reattach.
+        self.configurationKey = nil
         self.onPaywallError(["message": error.localizedDescription])
       }
     }

@@ -1,6 +1,7 @@
 package expo.modules.superwallexpo
 
 import android.content.Context
+import android.content.res.Configuration
 import android.view.ViewGroup
 import com.superwall.sdk.paywall.presentation.get_paywall.builder.PaywallBuilder
 import com.superwall.sdk.paywall.presentation.internal.PaywallPresentationRequestStatusReason
@@ -9,16 +10,26 @@ import com.superwall.sdk.paywall.presentation.internal.state.PaywallSkippedReaso
 import com.superwall.sdk.paywall.view.PaywallView
 import com.superwall.sdk.paywall.view.delegate.PaywallViewCallback
 import expo.modules.kotlin.AppContext
-import expo.modules.kotlin.views.ExpoView
 import expo.modules.kotlin.viewevent.EventDispatcher
+import expo.modules.kotlin.views.ExpoView
 import expo.modules.superwallexpo.json.toJson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
-/** A React Native host view that owns one SDK PaywallView at a time. */
+/**
+ * A React Native host view that owns one SDK PaywallView at a time.
+ *
+ * PaywallView instances are cached and shared by the SDK (keyed by paywall, not placement),
+ * so this host never destroys a paywall it merely stops showing: reloads and stale results
+ * detach only, and the SDK revives the cached instance on the next acquisition. The full
+ * destructive teardown runs only when a presentation genuinely ends (dismissal or unmount),
+ * and any rebuild waits for it to finish because the SDK cache can hand the same instance
+ * straight back.
+ */
 class SuperwallExpoPaywallView(
   context: Context,
   appContext: AppContext,
@@ -31,13 +42,20 @@ class SuperwallExpoPaywallView(
   val onPaywallSkip by EventDispatcher<Map<String, Any>>()
   val onPaywallError by EventDispatcher<Map<String, Any>>()
 
-  private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+  private val loadScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+  // Teardown must survive destroy(): cancelling destroyed()/cleanup() mid-flight would
+  // leave the shared cached PaywallView half torn down.
+  private val teardownScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+  private var teardownJob: Job? = null
+
   private var placement: String? = null
   private var params: Map<String, Any>? = null
   private var loadedPlacement: String? = null
   private var loadedParams: Map<String, Any>? = null
   private var loadGeneration = 0
   private var paywallView: PaywallView? = null
+  private var lastUiMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
 
   private val delegate =
     object : PaywallViewCallback {
@@ -57,7 +75,7 @@ class SuperwallExpoPaywallView(
         )
 
         if (shouldDismiss) {
-          releasePaywall()
+          teardownPaywall()
         }
       }
     }
@@ -75,32 +93,45 @@ class SuperwallExpoPaywallView(
     if (placement.isEmpty() || !isAttachedToWindow) return
     if (placement == loadedPlacement && params == loadedParams) return
 
+    val paramsSnapshot = params?.toMap()
     loadedPlacement = placement
-    loadedParams = params?.toMap()
+    loadedParams = paramsSnapshot
     loadGeneration += 1
     val generation = loadGeneration
-    releasePaywall()
+    detachPaywall()
     onPaywallLoadStart(emptyMap())
 
     val activity = appContext.currentActivity
     if (activity == null) {
+      clearLoadedConfig()
       onPaywallError(mapOf("message" to "No current Activity is available to load the paywall."))
       return
     }
 
-    PaywallBuilder(placement)
-      .params(params)
-      .delegate(delegate)
-      .activity(activity)
-      .build(
+    loadScope.launch {
+      // Never acquire from the SDK cache while a previous instance is still tearing
+      // down: getPaywall can return that same instance.
+      teardownJob?.join()
+      if (generation != loadGeneration) return@launch
+
+      val result =
+        PaywallBuilder(placement)
+          .params(paramsSnapshot)
+          .delegate(delegate)
+          .activity(activity)
+          .build()
+
+      if (generation != loadGeneration || !isAttachedToWindow) {
+        // Stale result. The view belongs to the SDK cache; leave it for the next
+        // acquisition. If this host is merely detached, allow a reattach to retry.
+        if (generation == loadGeneration) clearLoadedConfig()
+        return@launch
+      }
+
+      result.fold(
         onSuccess = { paywall ->
-          if (generation != loadGeneration || !isAttachedToWindow) {
-            if (paywall.parent == null) {
-              cleanupPaywall(paywall)
-            }
-            return@build
-          }
           if (paywall.parent != null) {
+            clearLoadedConfig()
             onPaywallError(
               mapOf(
                 "message" to
@@ -108,7 +139,7 @@ class SuperwallExpoPaywallView(
                   "Use a different placement for each mounted PaywallView.",
               ),
             )
-            return@build
+            return@fold
           }
 
           paywallView = paywall
@@ -119,11 +150,11 @@ class SuperwallExpoPaywallView(
           paywall.onViewCreated()
           onPaywallPresent(mapOf("paywallInfo" to paywall.info.toJson()))
         },
-        onError = { error ->
-          if (generation != loadGeneration) return@build
+        onFailure = { error ->
           if (error is PaywallSkippedReason) {
             onPaywallSkip(mapOf("reason" to error.toJson()))
           } else {
+            clearLoadedConfig()
             val message =
               if (error is PaywallPresentationRequestStatusReason) {
                 error.info
@@ -134,14 +165,14 @@ class SuperwallExpoPaywallView(
           }
         },
       )
+    }
   }
 
   fun destroy() {
     loadGeneration += 1
-    loadedPlacement = null
-    loadedParams = null
-    releasePaywall()
-    mainScope.cancel()
+    clearLoadedConfig()
+    teardownPaywall()
+    loadScope.cancel()
   }
 
   override fun onAttachedToWindow() {
@@ -149,28 +180,42 @@ class SuperwallExpoPaywallView(
     loadPaywallIfNeeded()
   }
 
-  override fun onDetachedFromWindow() {
-    loadGeneration += 1
+  override fun onConfigurationChanged(newConfig: Configuration?) {
+    super.onConfigurationChanged(newConfig)
+    val uiMode = (newConfig ?: resources.configuration).uiMode and Configuration.UI_MODE_NIGHT_MASK
+    if (uiMode != lastUiMode) {
+      lastUiMode = uiMode
+      paywallView?.takeIf { it.state.isPresented }?.onThemeChanged()
+    }
+  }
+
+  private fun clearLoadedConfig() {
     loadedPlacement = null
     loadedParams = null
-    releasePaywall()
-    super.onDetachedFromWindow()
   }
 
-  private fun releasePaywall() {
-    val paywall = paywallView
+  /**
+   * Stops showing the current paywall without destroying it. Used when swapping
+   * configuration: the SDK cache owns the instance and resets its transient
+   * presentation state when it is next acquired.
+   */
+  private fun detachPaywall() {
+    val paywall = paywallView ?: return
     paywallView = null
-    if (paywall == null) return
     removeView(paywall)
-    cleanupPaywall(paywall)
   }
 
-  private fun cleanupPaywall(paywall: PaywallView) {
+  /** Ends the presentation for real: dismissal or host unmount. */
+  private fun teardownPaywall() {
+    val paywall = paywallView ?: return
+    paywallView = null
+    removeView(paywall)
     paywall.beforeOnDestroy(forceCleanup = true)
     paywall.encapsulatingActivity = null
-    mainScope.launch {
-      paywall.destroyed(forceCleanup = true)
-      paywall.cleanup()
-    }
+    teardownJob =
+      teardownScope.launch {
+        paywall.destroyed(forceCleanup = true)
+        paywall.cleanup()
+      }
   }
 }
