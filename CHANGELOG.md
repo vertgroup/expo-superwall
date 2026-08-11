@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.0
+
+### Minor Changes
+
+- f75ec4b: Add a native `PaywallView` component for inline, overlay, and React Native modal layouts, including declarative loading, skipped, error, and dismissed fallbacks.
+
+### Patch Changes
+
+- 9f3133f: Update Android SDK to 2.7.24
+
 ## 1.2.0
 
 ### Minor Changes
