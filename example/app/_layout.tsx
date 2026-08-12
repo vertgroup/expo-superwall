@@ -48,6 +48,13 @@ export default function RootLayout() {
           headerShown: true
         }}
       />
+      <Stack.Screen
+        name="article-paywall"
+        options={{
+          title: 'Inline Article Paywall',
+          headerShown: true
+        }}
+      />
     </Stack>
   );
 }
