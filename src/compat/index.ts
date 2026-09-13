@@ -1,5 +1,6 @@
 import { Assignment } from "./lib/Assigments"
 import { ConfigurationStatus } from "./lib/ConfigurationStatus"
+import { CustomerInfo } from "./lib/CustomerInfo"
 import { EntitlementsInfo } from "./lib/EntitlementsInfo"
 import { IdentityOptions } from "./lib/IdentityOptions"
 import type { IntegrationAttributes } from "./lib/IntegrationAttributes"
@@ -21,7 +22,7 @@ import {
   SuperwallOptions,
 } from "./lib/SuperwallOptions"
 
-export { PaywallResult } from "./lib/PaywallResult"
+export type { PaywallResult } from "./lib/PaywallResult"
 export {
   PresentationResult,
   PresentationResultHoldout,
@@ -35,10 +36,18 @@ export {
 import { EventEmitter } from "expo"
 import { version } from "../../package.json"
 import SuperwallExpoModule from "../SuperwallExpoModule"
-import type { RestorationResultResponse } from "../SuperwallExpoModule.types"
+import type {
+  ProductResponse,
+  PurchaseResultResponse,
+  RestorationResultResponse,
+} from "../SuperwallExpoModule.types"
 import { filterUndefined } from "../utils/filterUndefined"
 
-export type { RestorationResultResponse } from "../SuperwallExpoModule.types"
+export type {
+  ProductResponse,
+  PurchaseResultResponse,
+  RestorationResultResponse,
+} from "../SuperwallExpoModule.types"
 export { ComputedPropertyRequest } from "./lib/ComputedPropertyRequest"
 export { ConfigurationStatus } from "./lib/ConfigurationStatus"
 export {
@@ -255,6 +264,13 @@ export default class Superwall {
     // MARK: - SuperwallDelegate Listeners
     SuperwallExpoModule.addListener("subscriptionStatusDidChange", async (data) => {
       Superwall.delegate?.subscriptionStatusDidChange?.(data.from, data.to)
+    })
+
+    SuperwallExpoModule.addListener("customerInfoDidChange", async (data) => {
+      Superwall.delegate?.customerInfoDidChange?.(
+        CustomerInfo.fromJson(data.from),
+        CustomerInfo.fromJson(data.to),
+      )
     })
 
     SuperwallExpoModule.addListener("handleSuperwallEvent", async (data) => {
@@ -637,6 +653,23 @@ export default class Superwall {
     const subscriptionStatusData = await SuperwallExpoModule.getSubscriptionStatus()
     return SubscriptionStatus.fromJson(subscriptionStatusData)
   }
+
+  /**
+   * Retrieves the latest customer purchase and subscription info, including
+   * subscription transactions, non-subscription transactions and entitlements.
+   *
+   * Waits until the SDK has loaded real customer data, so the resolved
+   * snapshot is never an unloaded placeholder. Implement
+   * {@link SuperwallDelegate.customerInfoDidChange} to be notified of
+   * subsequent changes.
+   *
+   * @returns {Promise<CustomerInfo>} A promise that resolves with a {@link CustomerInfo} snapshot.
+   */
+  async getCustomerInfo(): Promise<CustomerInfo> {
+    await this.awaitConfig()
+    const customerInfoJson = await SuperwallExpoModule.getCustomerInfo()
+    return CustomerInfo.fromJson(customerInfoJson)
+  }
   /**
    * Sets the user interface style, which overrides the system setting.
    *
@@ -755,6 +788,33 @@ export default class Superwall {
   }
 
   /**
+   * Initiates a purchase for a given product identifier.
+   *
+   * **Note:** When using a custom `PurchaseController`, calling this method triggers
+   * a double round-trip between JS and native (JS → native → JS → native). The native
+   * SDK calls the purchase controller's `purchaseFromAppStore` or `purchaseFromGooglePlay`
+   * method, which must then call `didPurchase()` back to the native module. This is an
+   * inherent limitation of the bridge architecture and cannot be bypassed without
+   * significant complexity.
+   *
+   * @param {string} productId - The product identifier to purchase.
+   * @returns {Promise<PurchaseResultResponse>} A promise that resolves with the purchase result.
+   */
+  static async purchase(productId: string): Promise<PurchaseResultResponse> {
+    return SuperwallExpoModule.purchase(productId)
+  }
+
+  /**
+   * Fetches product details for an array of product identifiers.
+   *
+   * @param {string[]} productIds - An array of product identifiers.
+   * @returns {Promise<ProductResponse[]>} A promise that resolves with an array of product objects.
+   */
+  static async products(productIds: string[]): Promise<ProductResponse[]> {
+    return SuperwallExpoModule.products(productIds)
+  }
+
+  /**
    * Dismisses the presented paywall, if one exists.
    *
    * @returns {Promise<void>} A promise that resolves once the paywall has been dismissed,
@@ -762,6 +822,20 @@ export default class Superwall {
    */
   async dismiss(): Promise<void> {
     await SuperwallExpoModule.dismiss()
+  }
+
+  /**
+   * Shows or hides the loading spinner on the presented paywall.
+   *
+   * Useful when a custom paywall action starts asynchronous work and you want the paywall
+   * to look busy until it finishes. Does nothing if no paywall is currently presented.
+   *
+   * @param isHidden - `false` to show the spinner, `true` to hide it again.
+   * @returns {Promise<void>} A promise that resolves once the native SDK has been told.
+   */
+  async togglePaywallSpinner(isHidden: boolean): Promise<void> {
+    await this.awaitConfig()
+    SuperwallExpoModule.togglePaywallSpinner(isHidden)
   }
 
   async setLogLevel(level: LogLevel): Promise<void> {

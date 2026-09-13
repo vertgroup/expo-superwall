@@ -6,8 +6,11 @@ import type { PresentationResult } from "./compat/lib/PresentationResult"
 import { resolveLocalResources } from "./localResources"
 import SuperwallExpoModule from "./SuperwallExpoModule"
 import type {
+  CustomerInfo,
   EntitlementsInfo,
   IntegrationAttributes,
+  ProductResponse,
+  PurchaseResultResponse,
   RestorationResultResponse,
   SubscriptionStatus,
 } from "./SuperwallExpoModule.types"
@@ -77,6 +80,17 @@ function awaitConfigured(): Promise<void> {
 }
 
 /**
+ * Fetches customer info without blocking the caller and commits it to the
+ * store.
+ */
+function seedCustomerInfo(set: (partial: Partial<SuperwallStore>) => void): void {
+  Promise.resolve()
+    .then(() => SuperwallExpoModule.getCustomerInfo())
+    .then((customerInfo) => set({ customerInfo }))
+    .catch(() => {})
+}
+
+/**
  * @category Models
  * @since 0.0.15
  * Interface representing the attributes of a user.
@@ -137,6 +151,13 @@ export interface SuperwallStore {
 
   /** The current subscription status of the user. */
   subscriptionStatus: SubscriptionStatus
+
+  /**
+   * The latest customer purchase and subscription info snapshot.
+   * Seeded after configuration completes and kept current via the native
+   * `customerInfoDidChange` event. `null` until the first snapshot arrives.
+   */
+  customerInfo: CustomerInfo | null
 
   /* -------------------- Internal -------------------- */
   // Internal listener references for cleanup handled inside Provider effect.
@@ -202,10 +223,48 @@ export interface SuperwallStore {
   restorePurchases: () => Promise<RestorationResultResponse>
 
   /**
+   * Initiates a purchase for a given product identifier.
+   * @param productId - The product identifier to purchase.
+   * @returns A promise that resolves with a {@link PurchaseResultResponse} indicating the outcome.
+   */
+  purchase: (productId: string) => Promise<PurchaseResultResponse>
+
+  /**
+   * Fetches product details for an array of product identifiers.
+   * @param productIds - An array of product identifiers.
+   * @returns A promise that resolves with an array of product objects.
+   */
+  products: (productIds: string[]) => Promise<ProductResponse[]>
+
+  /**
    * Dismisses any currently presented Superwall paywall.
    * @returns A promise that resolves when the dismissal is complete.
    */
   dismiss: () => Promise<void>
+
+  /**
+   * Shows or hides the loading spinner on the currently presented paywall.
+   *
+   * Useful when a custom paywall action kicks off asynchronous work and you want the
+   * paywall to look busy until it finishes. Does nothing if no paywall is presented.
+   *
+   * @param isHidden - `false` to show the spinner, `true` to hide it again.
+   * @returns A promise that resolves once the native SDK has been told.
+   *
+   * @example
+   * usePlacement({
+   *   onCustomCallback: async ({ name }) => {
+   *     await togglePaywallSpinner(false)
+   *     try {
+   *       const data = await syncAccount(name)
+   *       return { status: "success", data }
+   *     } finally {
+   *       await togglePaywallSpinner(true)
+   *     }
+   *   },
+   * })
+   */
+  togglePaywallSpinner: (isHidden: boolean) => Promise<void>
 
   /**
    * Preloads all paywalls configured in your Superwall dashboard.
@@ -272,6 +331,16 @@ export interface SuperwallStore {
   getDeviceAttributes: () => Promise<Record<string, any>>
 
   /**
+   * Retrieves the latest customer purchase and subscription info and updates
+   * the store's `customerInfo` state.
+   *
+   * Waits until the SDK has loaded real customer data, so the resolved
+   * snapshot is never an unloaded placeholder.
+   * @returns A promise that resolves with the {@link CustomerInfo} snapshot.
+   */
+  getCustomerInfo: () => Promise<CustomerInfo>
+
+  /**
    * Retrieves the App Store / Play Store storefront country code for the current device.
    * @returns A promise that resolves with the storefront country code, or undefined if unavailable.
    */
@@ -302,6 +371,7 @@ export const useSuperwallStore = create<SuperwallStore>((set, get) => ({
   subscriptionStatus: {
     status: "UNKNOWN",
   },
+  customerInfo: null,
 
   /* -------------------- Actions -------------------- */
   configure: async (apiKey, options) => {
@@ -353,6 +423,9 @@ export const useSuperwallStore = create<SuperwallStore>((set, get) => ({
         user: currentUser as UserAttributes,
         subscriptionStatus,
       })
+
+      // Seed customer info without blocking configuration
+      seedCustomerInfo(set)
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
       set({
@@ -364,6 +437,10 @@ export const useSuperwallStore = create<SuperwallStore>((set, get) => ({
   },
   identify: async (userId, options) => {
     await awaitConfigured()
+
+    // The previous identity's purchases must not leak into the new one. 
+    set({ customerInfo: null })
+
     await SuperwallExpoModule.identify(userId, options)
 
     // TODO: Instead of setting users after identify, we should set this based on an event
@@ -375,15 +452,21 @@ export const useSuperwallStore = create<SuperwallStore>((set, get) => ({
     ])
 
     set({ user: currentUser as UserAttributes, subscriptionStatus })
+    seedCustomerInfo(set)
   },
   reset: async () => {
     await awaitConfigured()
+
+    // The signed-out identity's purchases must not survive the reset.
+    set({ customerInfo: null })
+
     await SuperwallExpoModule.reset()
 
     const currentUser = await SuperwallExpoModule.getUserAttributes()
     const subscriptionStatus = await SuperwallExpoModule.getSubscriptionStatus()
 
     set({ user: currentUser as UserAttributes, subscriptionStatus })
+    seedCustomerInfo(set)
   },
   registerPlacement: async (placement, params, handlerId = "default") => {
     await awaitConfigured()
@@ -397,9 +480,21 @@ export const useSuperwallStore = create<SuperwallStore>((set, get) => ({
     await awaitConfigured()
     return SuperwallExpoModule.restorePurchases()
   },
+  purchase: async (productId) => {
+    await awaitConfigured()
+    return SuperwallExpoModule.purchase(productId)
+  },
+  products: async (productIds) => {
+    await awaitConfigured()
+    return SuperwallExpoModule.products(productIds)
+  },
   dismiss: async () => {
     await awaitConfigured()
     await SuperwallExpoModule.dismiss()
+  },
+  togglePaywallSpinner: async (isHidden) => {
+    await awaitConfigured()
+    SuperwallExpoModule.togglePaywallSpinner(isHidden)
   },
   preloadAllPaywalls: async () => {
     await awaitConfigured()
@@ -453,6 +548,12 @@ export const useSuperwallStore = create<SuperwallStore>((set, get) => ({
     const attributes = await SuperwallExpoModule.getDeviceAttributes()
     return attributes
   },
+  getCustomerInfo: async () => {
+    await awaitConfigured()
+    const customerInfo = await SuperwallExpoModule.getCustomerInfo()
+    set({ customerInfo })
+    return customerInfo
+  },
   getStoreFrontCountryCode: async () => {
     await awaitConfigured()
     const attributes = await SuperwallExpoModule.getDeviceAttributes()
@@ -481,6 +582,12 @@ export const useSuperwallStore = create<SuperwallStore>((set, get) => ({
           set({ subscriptionStatus: to })
         },
       ),
+    )
+
+    subscriptions.push(
+      SuperwallExpoModule.addListener("customerInfoDidChange", ({ to }: { to: CustomerInfo }) => {
+        set({ customerInfo: to })
+      }),
     )
 
     // Listen for configuration events

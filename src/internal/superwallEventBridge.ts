@@ -7,6 +7,7 @@ type NativeEventName =
   | "onPaywallError"
   | "onPaywallSkip"
   | "subscriptionStatusDidChange"
+  | "customerInfoDidChange"
   | "handleSuperwallEvent"
   | "handleCustomPaywallAction"
   | "willDismissPaywall"
@@ -88,6 +89,9 @@ const deliverToSubscriber = (
     case "subscriptionStatusDidChange":
       callbacks.onSubscriptionStatusChange?.(payload.to)
       return callbacks.onSubscriptionStatusChange != null
+    case "customerInfoDidChange":
+      callbacks.onCustomerInfoChange?.(payload.from, payload.to)
+      return callbacks.onCustomerInfoChange != null
     case "handleSuperwallEvent":
       callbacks.onSuperwallEvent?.(payload.eventInfo)
       return callbacks.onSuperwallEvent != null
@@ -186,7 +190,8 @@ const deliverBufferedEvent = (bufferedEvent: BufferedEvent): boolean => {
 
 const flushBufferedEvents = (): void => {
   for (let index = 0; index < bufferedEvents.length; ) {
-    if (deliverBufferedEvent(bufferedEvents[index])) {
+    const bufferedEvent = bufferedEvents[index]
+    if (bufferedEvent && deliverBufferedEvent(bufferedEvent)) {
       bufferedEvents.splice(index, 1)
       continue
     }
@@ -252,6 +257,9 @@ const installNativeListeners = (): void => {
   })
   SuperwallExpoModule.addListener("subscriptionStatusDidChange", (payload) => {
     handleBufferedNativeEvent("subscriptionStatusDidChange", payload)
+  })
+  SuperwallExpoModule.addListener("customerInfoDidChange", (payload) => {
+    handleBufferedNativeEvent("customerInfoDidChange", payload)
   })
   SuperwallExpoModule.addListener("handleSuperwallEvent", (payload) => {
     handleBufferedNativeEvent("handleSuperwallEvent", payload)

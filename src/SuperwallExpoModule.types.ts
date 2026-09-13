@@ -464,7 +464,8 @@ export interface CustomStoreProductIdentifier {
 /**
  * The offer type that applied to a {@link SubscriptionTransaction}.
  *
- * @platform Android
+ * iOS only delivers `"trial"`, `"code"`, `"promotional"` and `"winback"`;
+ * `"subscription"` and `"revoked"` are Android-only values.
  */
 export type SubscriptionOfferType =
   | "trial"
@@ -476,8 +477,6 @@ export type SubscriptionOfferType =
 
 /**
  * A subscription transaction recorded in the customer's purchase history.
- *
- * @platform Android — currently only delivered by the Android SDK.
  */
 export interface SubscriptionTransaction {
   /** The unique identifier for the transaction. */
@@ -508,8 +507,6 @@ export interface SubscriptionTransaction {
 
 /**
  * A non-subscription (one-time / consumable) transaction in the customer's purchase history.
- *
- * @platform Android — currently only delivered by the Android SDK.
  */
 export interface NonSubscriptionTransaction {
   /** The unique identifier for the transaction. */
@@ -528,9 +525,8 @@ export interface NonSubscriptionTransaction {
 
 /**
  * The latest subscription and entitlement state for the customer.
- * Snapshots are immutable and don't auto-update.
- *
- * @platform Android — currently only delivered by the Android SDK.
+ * Snapshots are immutable and don't auto-update — fetch a fresh snapshot with
+ * `getCustomerInfo()` or subscribe to `customerInfoDidChange` to stay current.
  */
 export interface CustomerInfo {
   /** The user ID at the time the snapshot was taken. */
@@ -2611,6 +2607,67 @@ export type RestorationResultResponse =
   | { result: "failed"; errorMessage: string | null }
 
 /**
+ * Represents the result of a standalone purchase attempt via {@link SuperwallExpoModule.purchase}.
+ * - `purchased`: The purchase completed successfully.
+ * - `cancelled`: The user cancelled the purchase.
+ * - `pending`: The purchase is pending (e.g., awaiting approval).
+ * - `failed`: The purchase failed, with an accompanying error message.
+ */
+export type PurchaseResultResponse =
+  | { type: "purchased" }
+  | { type: "cancelled" }
+  | { type: "pending" }
+  | { type: "failed"; error?: string }
+
+/**
+ * Represents a store product returned by {@link SuperwallExpoModule.products}.
+ * Matches the JSON shape produced by the native `StoreProduct.toJson()` on both iOS and Android.
+ */
+export interface ProductResponse {
+  productIdentifier: string
+  localizedPrice: string
+  localizedSubscriptionPeriod: string
+  period: string
+  periodWeeks: number
+  periodWeeksString: string
+  periodMonths: number
+  periodMonthsString: string
+  periodYears: number
+  periodYearsString: string
+  periodDays: number
+  periodDaysString: string
+  dailyPrice: string
+  weeklyPrice: string
+  monthlyPrice: string
+  yearlyPrice: string
+  hasFreeTrial: boolean
+  trialPeriodEndDateString: string
+  localizedTrialPeriodPrice: string
+  trialPeriodPrice: number
+  trialPeriodDays: number
+  trialPeriodDaysString: string
+  trialPeriodWeeks: number
+  trialPeriodWeeksString: string
+  trialPeriodMonths: number
+  trialPeriodMonthsString: string
+  trialPeriodYears: number
+  trialPeriodYearsString: string
+  trialPeriodText: string
+  locale: string
+  languageCode?: string | null
+  currencyCode?: string | null
+  currencySymbol?: string | null
+  regionCode?: string | null
+  price: number
+  trialPeriodEndDate?: string | null
+  isFamilyShareable?: boolean
+  introOfferToken?: string | null
+  subscriptionGroupIdentifier?: string | null
+  fullIdentifier?: string
+  subscriptionPeriod?: { value: number; unit: string } | null
+}
+
+/**
  * Defines the events emitted by the native Superwall Expo module that can be listened to.
  * These events provide a way to react to various SDK activities and user interactions.
  * Use `SuperwallExpoModule.addListener(eventName, callback)` to subscribe.
@@ -2660,6 +2717,18 @@ export type SuperwallExpoModuleEvents = {
   subscriptionStatusDidChange: (params: {
     from: SubscriptionStatus
     to: SubscriptionStatus
+  }) => void
+  /**
+   * Emitted when the customer's purchase and subscription info changes
+   * (e.g. after a purchase, restore, renewal, expiration or web redemption).
+   * Not emitted for the initial value — call `getCustomerInfo()` to seed state.
+   * @param params - Event parameters.
+   * @param params.from - The previous customer info snapshot. See {@link CustomerInfo}.
+   * @param params.to - The new customer info snapshot. See {@link CustomerInfo}.
+   */
+  customerInfoDidChange: (params: {
+    from: CustomerInfo
+    to: CustomerInfo
   }) => void
   /**
    * Emitted for various internal Superwall events, providing a detailed stream of SDK activity.

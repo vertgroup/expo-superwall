@@ -54,6 +54,9 @@ public class SuperwallExpoModule: Module {
   private let willRedeemLink = "willRedeemLink"
   private let didRedeemLink = "didRedeemLink"
 
+  // Customer Info Events
+  private let customerInfoDidChange = "customerInfoDidChange"
+
   public required init(appContext: AppContext) {
     super.init(appContext: appContext)
     SuperwallExpoModule.shared = self
@@ -100,7 +103,10 @@ public class SuperwallExpoModule: Module {
       paywallWillOpenDeepLink,
       handleLog,
       willRedeemLink,
-      didRedeemLink
+      didRedeemLink,
+
+      // Customer info events
+      customerInfoDidChange
     )
 
     View(SuperwallExpoPaywallView.self) {
@@ -275,6 +281,13 @@ public class SuperwallExpoModule: Module {
       }
     }
 
+    AsyncFunction("getCustomerInfo") { (promise: Promise) in
+      Task {
+        let customerInfo = await Superwall.shared.getCustomerInfo()
+        promise.resolve(customerInfo.toJson())
+      }
+    }
+
     AsyncFunction("getSubscriptionStatus") { (promise: Promise) in
       print("Getting subscription status")
       let subscriptionStatus = Superwall.shared.subscriptionStatus
@@ -373,6 +386,10 @@ public class SuperwallExpoModule: Module {
       }
     }
 
+    Function("togglePaywallSpinner") { (isHidden: Bool) in
+      Superwall.shared.togglePaywallSpinner(isHidden: isHidden)
+    }
+
     AsyncFunction("confirmAllAssignments") { (promise: Promise) in
       Superwall.shared.confirmAllAssignments { assignments in
         promise.resolve(assignments.map { $0.toJson() })
@@ -430,6 +447,33 @@ public class SuperwallExpoModule: Module {
 
     AsyncFunction("consume") { (_: String, promise: Promise) in
       promise.resolve(nil)
+    }
+
+    AsyncFunction("purchase") { (productId: String, promise: Promise) in
+      Task {
+        do {
+          let products = try await Superwall.shared.products(for: Set([productId]))
+          guard let storeProduct = products.first else {
+            promise.reject(PurchaseResultError(message: "Product not found for identifier: \(productId)"))
+            return
+          }
+          let result = await Superwall.shared.purchase(storeProduct)
+          promise.resolve(result.toJson())
+        } catch {
+          promise.reject(error)
+        }
+      }
+    }
+
+    AsyncFunction("products") { (productIds: [String], promise: Promise) in
+      Task {
+        do {
+          let products = try await Superwall.shared.products(for: Set(productIds))
+          promise.resolve(products.map { $0.toJson() })
+        } catch {
+          promise.reject(error)
+        }
+      }
     }
   }
 }
