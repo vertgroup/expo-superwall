@@ -14,6 +14,7 @@ import com.superwall.sdk.Superwall
 import com.superwall.sdk.delegate.SuperwallDelegate
 import com.superwall.sdk.delegate.PurchaseResult
 import com.superwall.sdk.delegate.RestorationResult
+import com.superwall.sdk.models.customer.CustomerInfo
 import com.superwall.sdk.models.entitlements.SubscriptionStatus
 import com.superwall.sdk.models.entitlements.Entitlement
 import com.superwall.sdk.identity.IdentityOptions
@@ -33,6 +34,7 @@ import com.superwall.sdk.paywall.view.webview.PaywallResource
 import com.superwall.sdk.paywall.presentation.get_presentation_result.getPresentationResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.runBlocking
@@ -54,7 +56,18 @@ class SuperwallExpoModule : Module() {
     // purchase future incomplete forever.
     fun emitEvent(name: String, body: Map<String, Any?>?) {
       val liveInstances = synchronized(instances) { instances.toList() }
-      liveInstances.forEach { it.sendEvent(name, body ?: emptyMap()) }
+      liveInstances.forEach { it.trySendEvent(name, body ?: emptyMap()) }
+    }
+  }
+
+  // The Superwall SDK can call back on this module after the Expo module registry
+  // has been invalidated (e.g. CurrentActivityTracker logging during activity
+  // destroy). `sendEvent` then throws from `AppContext.eventEmitter`; dropping the
+  // undeliverable event is better than crashing the process mid-teardown.
+  internal fun trySendEvent(name: String, body: Map<String, Any?>) {
+    try {
+      sendEvent(name, body)
+    } catch (_: Exception) {
     }
   }
 
@@ -95,6 +108,10 @@ class SuperwallExpoModule : Module() {
   private val handleLog = "handleLog"
   private val willRedeemLink = "willRedeemLink"
   private val didRedeemLink = "didRedeemLink"
+
+  // Customer Info Events
+  private val customerInfoDidChange = "customerInfoDidChange"
+
   val purchaseController = PurchaseControllerBridge.instance
 
   override fun definition() = ModuleDefinition {
@@ -124,8 +141,21 @@ class SuperwallExpoModule : Module() {
       paywallWillOpenDeepLink,
       handleLog,
       willRedeemLink,
-      didRedeemLink
+      didRedeemLink,
+
+      // Customer info events
+      customerInfoDidChange
     )
+
+    OnDestroy {
+      // Once this module's app context is torn down its event emitter is gone.
+      // Deregister eagerly so `emitEvent` stops fanning out to it, rather than
+      // waiting for the WeakHashMap entry to be garbage-collected.
+      synchronized(instances) { instances.remove(this@SuperwallExpoModule) }
+      if (instance === this@SuperwallExpoModule) {
+        instance = null
+      }
+    }
 
     View(SuperwallExpoPaywallView::class) {
       Name("PaywallView")
@@ -263,7 +293,7 @@ class SuperwallExpoModule : Module() {
           mapOf(
             "paywallInfoJson" to paywallInfo.toJson(),
           "handlerId" to handlerId)
-          sendEvent(onPaywallPresent, data)
+          trySendEvent(onPaywallPresent, data)
         }
 
 
@@ -275,7 +305,7 @@ class SuperwallExpoModule : Module() {
           "result" to result.toJson(),
           "handlerId" to handlerId)
           
-          sendEvent(onPaywallDismiss, data)
+          trySendEvent(onPaywallDismiss, data)
         }
 
         handler?.onError { error ->
@@ -284,7 +314,7 @@ class SuperwallExpoModule : Module() {
             "errorString" to error.localizedMessage,
           "handlerId" to handlerId,
           )
-          sendEvent(onPaywallError, data)
+          trySendEvent(onPaywallError, data)
         }
 
         handler?.onSkip { reason ->
@@ -292,7 +322,7 @@ class SuperwallExpoModule : Module() {
           mapOf(
             "skippedReason" to reason.toJson(),
              "handlerId" to handlerId)
-          sendEvent(onPaywallSkip, data)
+          trySendEvent(onPaywallSkip, data)
         }
 
         handler?.onCustomCallback { callback ->
@@ -307,7 +337,7 @@ class SuperwallExpoModule : Module() {
           )
           callback.variables?.let { data["variables"] = it }
 
-          sendEvent(onCustomCallback, data)
+          trySendEvent(onCustomCallback, data)
 
           future.await()
         }
@@ -343,6 +373,17 @@ class SuperwallExpoModule : Module() {
         promise.reject(CodedException(error))
       }
       }
+
+    AsyncFunction("getCustomerInfo") { promise: Promise ->
+      ioScope.launch {
+        try {
+          val customerInfo = Superwall.instance.customerInfo.first { it != CustomerInfo.empty() }
+          scope.launch { promise.resolve(customerInfo.toJson()) }
+        } catch (error: Throwable) {
+          scope.launch { promise.reject(CodedException(error)) }
+        }
+      }
+    }
 
     AsyncFunction("getSubscriptionStatus") { promise: Promise ->
       try {
@@ -474,6 +515,10 @@ class SuperwallExpoModule : Module() {
       }
     }
 
+    Function("togglePaywallSpinner") { isHidden: Boolean ->
+      Superwall.instance.togglePaywallSpinner(isHidden)
+    }
+
     AsyncFunction("confirmAllAssignments") { promise: Promise ->
       ioScope.launch {
         Superwall.instance.confirmAllAssignments().fold({
@@ -553,6 +598,36 @@ class SuperwallExpoModule : Module() {
         }, { error ->
           scope.launch { promise.reject(CodedException(error)) }
         })
+      }
+    }
+
+    AsyncFunction("purchase") { productId: String, promise: Promise ->
+      ioScope.launch {
+        try {
+          val result = Superwall.instance.purchase(productId).getOrThrow()
+          scope.launch {
+            promise.resolve(purchaseResultToJson(result))
+          }
+        } catch (error: Exception) {
+          scope.launch {
+            promise.reject(CodedException(error))
+          }
+        }
+      }
+    }
+
+    AsyncFunction("products") { productIds: List<String>, promise: Promise ->
+      ioScope.launch {
+        try {
+          val products = Superwall.instance.getProducts(*productIds.toTypedArray()).getOrThrow()
+          scope.launch {
+            promise.resolve(products.values.map { it.toJson() })
+          }
+        } catch (error: Exception) {
+          scope.launch {
+            promise.reject(CodedException(error))
+          }
+        }
       }
     }
   }

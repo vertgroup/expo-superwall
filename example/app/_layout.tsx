@@ -55,6 +55,22 @@ export default function RootLayout() {
           headerShown: true
         }}
       />
+      <Stack.Screen
+        name="paywall-spinner"
+        options={{ title: 'Paywall Spinner Test' }}
+      />
+      <Stack.Screen
+        name="standalone-purchase"
+        options={{ title: 'Products & Purchase Test' }}
+      />
+      <Stack.Screen
+        name="customer-info"
+        options={{
+          title: 'Customer Info',
+          headerShown: true,
+          headerBackButtonDisplayMode: 'minimal'
+        }}
+      />
     </Stack>
   );
 }
